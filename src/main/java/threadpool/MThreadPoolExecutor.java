@@ -19,9 +19,10 @@ import java.util.concurrent.*;
  *
  * 提供的方法：
  * execute()
- * stop()
- * shutdown()
- * Worker类负责执行任务队列中的任务
+ * stop():停止接收任务并中断所有的线程
+ * shutdown()：停止接收任务
+ *
+ * Worker类负责任务的执行
  */
 public class MThreadPoolExecutor implements MExecutorService {
     private volatile int maxThreadSize;
@@ -29,12 +30,15 @@ public class MThreadPoolExecutor implements MExecutorService {
     private volatile BlockingQueue<Runnable> taskQueue;
     private volatile long keepAliveTime;
     private TimeUnit timeUnit;
-    private MRejectedExecutionHandler rejectedExecutionHandler = new AbortPolicy();
+    private MRejectedExecutionHandler rejectedExecutionHandler;
     private ThreadFactory threadFactory;
     //当前worker数量
     private MAtomicInteger workerCount = new MAtomicInteger();
-    //private MAtomicInteger threadCount = new MAtomicInteger();
 
+    private static final MRejectedExecutionHandler DefaultRejectHandler = new AbortPolicy();
+    private static final ThreadFactory DefaultThreadFactory = r -> new Thread(r);
+
+    //线程状态
     private static final int RUNNING = 1;
     private static final int SHUTDOWN = 2;
     private static final int STOP = 3;
@@ -47,26 +51,29 @@ public class MThreadPoolExecutor implements MExecutorService {
     private volatile int state = RUNNING;
 
     public MThreadPoolExecutor(int maxThreadSize, int maxCoreThreadSize, BlockingQueue<Runnable> taskQueue) {
-        if(maxThreadSize < maxCoreThreadSize) {
-            new IllegalArgumentException("maxThreadSize must be greater or equal than maxCoreThreadSize");
-        }
-        this.maxThreadSize = maxThreadSize;
-        this.maxCoreThreadSize = maxCoreThreadSize;
-        this.taskQueue = taskQueue;
+        this(maxThreadSize, maxCoreThreadSize, taskQueue, 0, TimeUnit.MILLISECONDS,
+                DefaultRejectHandler, DefaultThreadFactory);
     }
 
     public MThreadPoolExecutor(int maxThreadSize, int maxCoreThreadSize, BlockingQueue<Runnable> taskQueue,
                                long keepAliveTime, TimeUnit timeUnit) {
-        this(maxThreadSize, maxCoreThreadSize, taskQueue);
-        this.keepAliveTime = keepAliveTime;
-        this.timeUnit = timeUnit;
+        this(maxThreadSize, maxCoreThreadSize, taskQueue,
+                keepAliveTime, timeUnit, DefaultRejectHandler, DefaultThreadFactory);
     }
+
 
     public MThreadPoolExecutor(int maxThreadSize, int maxCoreThreadSize, BlockingQueue<Runnable> taskQueue,
                                long keepAliveTime, TimeUnit timeUnit, MRejectedExecutionHandler rejectedExecutionHandler,
                                ThreadFactory threadFactory) {
-        this(maxThreadSize, maxCoreThreadSize, taskQueue, keepAliveTime, timeUnit);
+        if(maxThreadSize < maxCoreThreadSize) {
+            new IllegalArgumentException("maxThreadSize must be greater or equal than maxCoreThreadSize");
+        }
 
+        this.maxThreadSize = maxThreadSize;
+        this.maxCoreThreadSize = maxCoreThreadSize;
+        this.taskQueue = taskQueue;
+        this.keepAliveTime = keepAliveTime;
+        this.timeUnit = timeUnit;
         this.rejectedExecutionHandler = rejectedExecutionHandler;
         this.threadFactory = threadFactory;
     }
@@ -126,8 +133,8 @@ public class MThreadPoolExecutor implements MExecutorService {
         try {
             thisLock.lock();
             Worker worker = new Worker(task, isCoreThread);
-            thread = new Thread(worker);
-
+            //thread = new Thread(worker);
+            thread = worker.thread;
             workerHashSet.add(worker);
             //worker数量加1
             workerCount.increment();
@@ -135,6 +142,7 @@ public class MThreadPoolExecutor implements MExecutorService {
         } finally {
             thisLock.unlock();
             if(added) {
+                System.out.println("create thread: " + thread);
                 thread.start();
             }
         }
@@ -155,6 +163,10 @@ public class MThreadPoolExecutor implements MExecutorService {
         }
     }
 
+    private ThreadFactory getThreadFactory() {
+        return threadFactory;
+    }
+
     private void reject(Runnable runnable) {
         rejectedExecutionHandler.rejectExecution(runnable, this);
     }
@@ -163,6 +175,12 @@ public class MThreadPoolExecutor implements MExecutorService {
     public void stop() {
         state = STOP;
         //TODO：中断所有线程
+        for (Worker worker : workerHashSet) {
+            Thread t = worker.thread;
+            if(t.isInterrupted() || t == null) continue;
+
+            t.interrupt();
+        }
 
     }
 
@@ -171,15 +189,19 @@ public class MThreadPoolExecutor implements MExecutorService {
         state = SHUTDOWN;
     }
 
+    //工作线程
     private class Worker implements Runnable {
         //是否是核心线程
         boolean isCoreWorker;
         //需要执行的任务
         Runnable task;
+        //执行任务的线程
+        Thread thread;
 
         public Worker(Runnable runnable, boolean coreWorker) {
             task = runnable;
             isCoreWorker = coreWorker;
+            thread = getThreadFactory().newThread(runnable);
         }
 
         @Override
@@ -207,7 +229,7 @@ public class MThreadPoolExecutor implements MExecutorService {
                         }
                         task.run();
                     } catch (InterruptedException e) {
-                        e.printStackTrace();
+                        //e.printStackTrace();
                     }
                 }
             }
