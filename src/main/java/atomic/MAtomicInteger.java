@@ -41,41 +41,18 @@ public class MAtomicInteger {
         val = v;
     }
 
-    public int getAndIncrement() {
-        //int ret = 0;
-        return UNSAFE.getAndAddInt(this, valueOffset, 1);
+    public void increment() {
+        getAndIncrement(1);
     }
 
-    public static void main(String[] args) throws InterruptedException {
-        //AtomicStampedReference
-        MAtomicInteger atomicInteger = new MAtomicInteger();
-        CyclicBarrier cyclicBarrier = new CyclicBarrier(3);
-        //int n = 0;
-        Runnable runnable = () -> {
-            //Thread.currentThread().yield();
-            try {
-                cyclicBarrier.await();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            } catch (BrokenBarrierException e) {
-                e.printStackTrace();
-            }
-            for (int i = 0; i < 10000000; i++) {
-                atomicInteger.getAndIncrement();
-                //n++;
-            }
-        };
-        Thread thread1 = new Thread(runnable);
-        Thread thread2 = new Thread(runnable);
-        Thread thread3 = new Thread(runnable);
-        thread1.start();
-        thread2.start();
-        thread3.start();
-        thread1.join();
-        thread2.join();
-        thread3.join();
-        //System.out.println("n = " + n);
-        System.out.println(atomicInteger.get());
+    public void decrease() {
+        getAndIncrement(-1);
     }
+
+    public int getAndIncrement(int added) {
+        //int ret = 0;
+        return UNSAFE.getAndAddInt(this, valueOffset, added);
+    }
+
 
 }

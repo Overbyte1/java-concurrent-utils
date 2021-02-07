@@ -1,7 +1,8 @@
 package atomic;
 
-import concurrent.unsafe.MUnsafe;
+
 import sun.misc.Unsafe;
+import unsafe.MUnsafe;
 
 public class MAtomicStampedReference {
     private static final Unsafe UNSAFE = MUnsafe.getUnsafe();

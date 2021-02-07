@@ -29,11 +29,11 @@ public class MThreadPoolExecutor implements MExecutorService {
     private volatile BlockingQueue<Runnable> taskQueue;
     private volatile long keepAliveTime;
     private TimeUnit timeUnit;
-    private MRejectedExecutionHandler rejectedExecutionHandler;
+    private MRejectedExecutionHandler rejectedExecutionHandler = new AbortPolicy();
     private ThreadFactory threadFactory;
     //当前worker数量
     private MAtomicInteger workerCount = new MAtomicInteger();
-    private MAtomicInteger threadCount = new MAtomicInteger();
+    //private MAtomicInteger threadCount = new MAtomicInteger();
 
     private static final int RUNNING = 1;
     private static final int SHUTDOWN = 2;
@@ -47,19 +47,17 @@ public class MThreadPoolExecutor implements MExecutorService {
     private volatile int state = RUNNING;
 
     public MThreadPoolExecutor(int maxThreadSize, int maxCoreThreadSize, BlockingQueue<Runnable> taskQueue) {
+        if(maxThreadSize < maxCoreThreadSize) {
+            new IllegalArgumentException("maxThreadSize must be greater or equal than maxCoreThreadSize");
+        }
         this.maxThreadSize = maxThreadSize;
         this.maxCoreThreadSize = maxCoreThreadSize;
         this.taskQueue = taskQueue;
-        this.keepAliveTime = 0;
-        this.timeUnit = TimeUnit.MILLISECONDS;
-        rejectedExecutionHandler = new AbortPolicy();
     }
 
     public MThreadPoolExecutor(int maxThreadSize, int maxCoreThreadSize, BlockingQueue<Runnable> taskQueue,
                                long keepAliveTime, TimeUnit timeUnit) {
-        this.maxThreadSize = maxThreadSize;
-        this.maxCoreThreadSize = maxCoreThreadSize;
-        this.taskQueue = taskQueue;
+        this(maxThreadSize, maxCoreThreadSize, taskQueue);
         this.keepAliveTime = keepAliveTime;
         this.timeUnit = timeUnit;
     }
@@ -67,11 +65,8 @@ public class MThreadPoolExecutor implements MExecutorService {
     public MThreadPoolExecutor(int maxThreadSize, int maxCoreThreadSize, BlockingQueue<Runnable> taskQueue,
                                long keepAliveTime, TimeUnit timeUnit, MRejectedExecutionHandler rejectedExecutionHandler,
                                ThreadFactory threadFactory) {
-        this.maxThreadSize = maxThreadSize;
-        this.maxCoreThreadSize = maxCoreThreadSize;
-        this.taskQueue = taskQueue;
-        this.keepAliveTime = keepAliveTime;
-        this.timeUnit = timeUnit;
+        this(maxThreadSize, maxCoreThreadSize, taskQueue, keepAliveTime, timeUnit);
+
         this.rejectedExecutionHandler = rejectedExecutionHandler;
         this.threadFactory = threadFactory;
     }
@@ -88,11 +83,11 @@ public class MThreadPoolExecutor implements MExecutorService {
                 reject(task);
             }
             //判断线程数量，如果线程数量小于coreThreadSize，就创建核心线程来处理任务
-            //需要保证线程安全，即threadCount的线程安全，使用双重检查锁定
-            if (threadCount.get() < maxCoreThreadSize) {
+            //需要保证threadCount不超过maxCoreThreadSize，使用双重检查锁定
+            if (workerCount.get() < maxCoreThreadSize) {
                 try {
                     thisLock.lock();
-                    if(threadCount.get() < maxCoreThreadSize) {
+                    if(workerCount.get() < maxCoreThreadSize) {
                         addWorker(task, true);
                         return;
                     } else {
@@ -104,11 +99,13 @@ public class MThreadPoolExecutor implements MExecutorService {
             }
             //运行到此处说明核心线程数已经达到最大值，无法创建核心线程，此时尝试加入任务队列taskQueue
             boolean res = taskQueue.offer(task);
+            if(res) return;
             //如果加入任务队列失败，尝试创建非核心线程处理任务
-            if (!res && threadCount.get() < maxThreadSize) {
+            if (workerCount.get() < maxThreadSize) {
                 addWorker(task, false);
             } else {    //线程数量达到最大，拒绝执行
                 reject(task);
+                return;
             }
         }
 
@@ -117,8 +114,8 @@ public class MThreadPoolExecutor implements MExecutorService {
         return state == RUNNING;
     }
 
-    /**需要保证workerHashSet操作的安全
-     * 添加 Worker 线程
+    /**
+     * 添加 Worker 线程，使用MReentrantLock保证workerHashSet操作的安全
      * @param task
      * @param isCoreThread
      */
@@ -191,8 +188,13 @@ public class MThreadPoolExecutor implements MExecutorService {
             while(isRunning()) {
                 if(isCoreWorker) {
                     try {
-                        Runnable task = taskQueue.take();
-                        task.run();
+                        if(task != null) {
+                            task.run();
+                            task = null;
+                            continue;
+                        }
+                        Runnable taskInQueue = taskQueue.take();
+                        taskInQueue.run();
                     } catch (InterruptedException e) {}
 
                 } else {    //非核心线程
@@ -205,13 +207,13 @@ public class MThreadPoolExecutor implements MExecutorService {
                         }
                         task.run();
                     } catch (InterruptedException e) {
-                        //e.printStackTrace();
+                        e.printStackTrace();
                     }
                 }
             }
         }
     }
-    private static class AbortPolicy implements MRejectedExecutionHandler {
+    public static class AbortPolicy implements MRejectedExecutionHandler {
         @Override
         public void rejectExecution(Runnable runnable, MThreadPoolExecutor executor) {
             System.out.println(runnable + " was rejected by " + executor);

@@ -82,7 +82,7 @@ public abstract class MAbstractQueuedSynchronizer {
                 currentThread = Thread.currentThread();
             }
         }
-        System.out.println(Thread.currentThread() + " lock, state = " + state);
+
     }
 
     /**
