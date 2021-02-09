@@ -3,6 +3,9 @@ package lock;
 import sun.misc.Unsafe;
 import unsafe.MUnsafe;
 
+import java.util.Date;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.LockSupport;
 
 /*
@@ -44,7 +47,10 @@ public abstract class MAbstractQueuedSynchronizer {
         if(!tryAccquire(count)) {
             //加入队列，并开始自旋
             //addNodeToTail(new Node(Thread.currentThread()));
-            spinToGetLock(count);
+            Node curNode = new Node(Thread.currentThread());
+            //将代表当前线程的节点node添加到队列的尾部
+            addNodeToTail(curNode);
+            spinToGetLock(count, curNode);
             //获取锁成功后返回
             currentThread = Thread.currentThread();
 
@@ -85,6 +91,34 @@ public abstract class MAbstractQueuedSynchronizer {
 
     }
 
+    public boolean tryAcquireNanos(int count, long timeout, TimeUnit timeUnit) {
+        if(timeout < 0 || count <= 0) {
+            return false;
+        }
+        Node node = new Node(Thread.currentThread());
+        addNodeToTail(node);
+        long nanoTime = timeUnit.toNanos(timeout);
+        long deadline = System.nanoTime() + nanoTime;
+        long lastTime = deadline - System.nanoTime();
+        while(lastTime > 0) {
+            if(node == head.next && tryAccquire(1)) {
+                //变更头节点
+                head = node;
+                return true;
+            }
+            LockSupport.parkNanos(lastTime);
+            lastTime = deadline - System.nanoTime();
+        }
+
+        return false;
+    }
+
+    //将节点的状态修改为取消状态CANCEL
+    private void cancelAcquire(Node node) {
+        int status = node.waitStatus;
+
+    }
+
     /**
      * 唤醒下一个等待锁（队列首）的线程
      * @param count
@@ -92,6 +126,9 @@ public abstract class MAbstractQueuedSynchronizer {
     public void release(int count) {
         if(currentThread != Thread.currentThread() || count > state) {
             throw new IllegalMonitorStateException();
+        }
+        if(count <= 0) {
+            throw new IllegalArgumentException("argument can not be negative");
         }
         if(tryRelease(count)) {
             //System.out.println(Thread.currentThread() + " unlock state = " + state);
@@ -106,6 +143,7 @@ public abstract class MAbstractQueuedSynchronizer {
     private void wakeUpNext() {
         //System.out.println(Thread.currentThread() + " call wakeUpNext()");
         if(head.next != null) {
+
             LockSupport.unpark(head.next.thread);
         }
     }
@@ -113,10 +151,8 @@ public abstract class MAbstractQueuedSynchronizer {
     protected abstract boolean tryAccquire(int count);
     protected abstract boolean tryRelease(int count);
 
-    private void spinToGetLock(int count) {
-        Node node = new Node(Thread.currentThread());
-        //将代表当前线程的节点node添加到队列的尾部
-        addNodeToTail(node);
+    private void spinToGetLock(int count, Node node) {
+
 
         while (true) {
             //如果node的前一个节点是头节点就尝试CAS加锁，否则继续阻塞
@@ -146,6 +182,9 @@ public abstract class MAbstractQueuedSynchronizer {
             }
         }
     }
+    private int getState() {
+        return state;
+    }
 
     protected boolean compareAndSetState(int expect, int newVal) {
         return UNSAFE.compareAndSwapInt(this, stateOffset, expect, newVal);
@@ -155,15 +194,95 @@ public abstract class MAbstractQueuedSynchronizer {
     }
 
 
+
     private static class Node {
         volatile Node next;
+        //用于condition queue
+        volatile Node nextWaiter;
+        volatile boolean inConditionQueue;
+        volatile int waitStatus;
+        //该节点已经被取消等待锁
+        final int CANCEL = -1;
+        final int INIT = 0;
+        //等待被唤醒
+        final int SIGNAL = 1;
         //volatile Node pre;
         volatile Thread thread;
-        public Node() {}
+        public Node() {
+            inConditionQueue = false;
+        }
         public Node(Thread thread) {
             this.thread = thread;
         }
+        public Node(Thread thread, boolean inConditionQueue) {
+            this.thread = thread;
+            this.inConditionQueue = inConditionQueue;
+        }
+    }
 
+    private class ConditionObject implements Condition {
+        private volatile Node head = new Node();
+        private volatile Node tail = head;
+
+        @Override
+        public void await() throws InterruptedException {
+            //检查当前线程是否持有锁，只有持有锁才能调用await()
+            if(getState() == 0 || currentThread != Thread.currentThread()) {
+                throw new IllegalMonitorStateException();
+            }
+
+            //将节点添加到条件队列 condition queue
+            Node node = addWaiter();
+            //释放当前线程持有的所有锁
+            int saveState = getState();
+            release(saveState);
+            //判断是否被唤醒，如果没被唤醒则一直阻塞
+            while(node.inConditionQueue) {
+                LockSupport.park();
+            }
+            //此时节点已经被转移到同步队列中，尝试获取锁
+            spinToGetLock(saveState, node);
+
+        }
+        private Node addWaiter() {
+            Node node = new Node(Thread.currentThread(), true);
+            tail.nextWaiter = node;
+            tail = node;
+            return node;
+        }
+
+        @Override
+        public void awaitUninterruptibly() {
+
+        }
+
+        @Override
+        public long awaitNanos(long nanosTimeout) throws InterruptedException {
+            return 0;
+        }
+
+        @Override
+        public boolean await(long time, TimeUnit unit) throws InterruptedException {
+            return false;
+        }
+
+        @Override
+        public boolean awaitUntil(Date deadline) throws InterruptedException {
+            return false;
+        }
+
+        @Override
+        public void signal() {
+
+        }
+        private void doSignal() {
+
+        }
+
+        @Override
+        public void signalAll() {
+
+        }
     }
 
 }

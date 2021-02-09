@@ -47,12 +47,15 @@ public class MReentrantLock implements Lock {
 
     @Override
     public boolean tryLock() {
-        throw new UnsupportedOperationException();
+        return sync.tryAccquire(1);
     }
 
     @Override
-    public boolean tryLock(long time, TimeUnit unit) throws InterruptedException {
-        throw new UnsupportedOperationException();
+    public boolean tryLock(long timeout, TimeUnit unit) throws InterruptedException {
+        if(!tryLock() && !sync.tryAcquireNanos(1, timeout, unit)) {
+            return false;
+        }
+        return true;
     }
 
     @Override
