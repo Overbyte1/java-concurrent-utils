@@ -54,19 +54,30 @@ public abstract class MAbstractQueuedSynchronizer {
             //获取锁成功后返回
             currentThread = Thread.currentThread();
 
-            Node node = head.next;
 
-            //将当前节点从链表中移出
-            //如果tail == node，有可能在方法addNodeToTail中会发生冲突 head.next == null tail &&  != null
+            //TODO：head.next得不到释放，无法被回收
+        } else { //获取锁成功
+            if(currentThread == null) {
+                currentThread = Thread.currentThread();
+            }
+        }
 
-            //head.next = node.next;
+    }
+
+    private void removeFirstNode() {
+        Node node = head.next;
+
+        //将当前节点从链表中移出
+        //如果tail == node，有可能在方法addNodeToTail中会发生冲突 head.next == null tail &&  != null
+
+        //head.next = node.next;
             /*当tail == node，当前线程执行到这里，如果另一个线程A执行addNodeToTail方法修改了tail，则下面这条CAS操作执行失败，
             此时head.next == null，但是tail != null
             导致线程A永远得不到唤醒
              */
-            //compareAndSetTail(node, head);
+        //compareAndSetTail(node, head);
 
-            if(!compareAndSetTail(node, head)) {
+        if(!compareAndSetTail(node, head)) {
                 /*代码执行到此处说明 tail != node，有两种情况：
                     1. 此前 tail == node ，但当前方法执行CAS之前，其他线程执行addNodeToTail中的CAS成功修改tail，
                        但是还未执行 t.next = node 语句，因此node.next == null，所以需要等待该赋值语句完成，
@@ -75,20 +86,35 @@ public abstract class MAbstractQueuedSynchronizer {
                     2. 此前tail != node，还有其他线程在队列中排队，不需要额外处理
 
                  */
-                //TODO:此处需要优化
-                while(node.next == null) {
-                    Thread.yield();
-                }
-
-                head.next = node.next;
+            //TODO:此处需要优化
+            while(node.next == null) {
+                Thread.yield();
             }
-            //TODO：head.next得不到释放，无法被回收
-        } else { //获取锁成功
-            if(currentThread == null) {
-                currentThread = Thread.currentThread();
+
+            head.next = node.next;
+        }
+    }
+
+    /**
+     * 清理已经取消等待的节点，只有当锁被获取后被调用
+     * 因为只有获取锁的线程修改除了tail以外的节点，其他线程会通过addTail()修改tail，所以需要考虑这种情况
+     * */
+    private void cleanCancelNode() {
+
+        Node t = tail, node = head.next, pre = head;
+        while(node.next != t) {
+            //addTail()执行时可能会出现这种情况：node.next == null -> node.next == tail，或者是链表除头节点只有一个节点
+            if(node.next == null) {
+                break;
+            }
+            if(node.waitStatus == Node.CANCEL) {
+                pre.next = node.next;
+                node = node.next;
+            } else {
+                pre = node;
+                node = node.next;
             }
         }
-
     }
 
     public boolean tryAcquireNanos(int count, long timeout, TimeUnit timeUnit) {
@@ -101,21 +127,26 @@ public abstract class MAbstractQueuedSynchronizer {
         long deadline = System.nanoTime() + nanoTime;
         long lastTime = deadline - System.nanoTime();
         while(lastTime > 0) {
-            if(node == head.next && tryAccquire(1)) {
-                //变更头节点
-                head = node;
+            if(/*node == head.next && */tryAccquire(1)) {
+                //清理已经取消等待的节点
+                cleanCancelNode();
+                //除去首节点
+                removeFirstNode();
                 return true;
             }
             LockSupport.parkNanos(lastTime);
             lastTime = deadline - System.nanoTime();
         }
+        //TODO:将节点状态修改为 CANCEL
+        cancelAcquire(node);
 
         return false;
     }
 
     //将节点的状态修改为取消状态CANCEL
     private void cancelAcquire(Node node) {
-        int status = node.waitStatus;
+        node.waitStatus = Node.CANCEL;
+        node.thread = null;
 
     }
 
@@ -142,9 +173,25 @@ public abstract class MAbstractQueuedSynchronizer {
 
     private void wakeUpNext() {
         //System.out.println(Thread.currentThread() + " call wakeUpNext()");
-        if(head.next != null) {
+//        Node node = head.next, pre = head;
+//        while (node != null) {
+//            if(node.waitStatus == Node.CANCEL) {
+//                pre.next = node.next;
+//                node = node.next;
+//                pre = node;
+//                continue;
+//            }
+//            LockSupport.unpark(node.thread);
+//        }
 
-            LockSupport.unpark(head.next.thread);
+        //有些线程可能已经取消等待，所以等待状态是CNACEL，找到第一个等待状态不为CANCEL的节点进行唤醒
+        Node node = head.next;
+        while(node != null) {
+            if(node.waitStatus > Node.CANCEL) {
+                LockSupport.unpark(node.thread);
+                break;
+            }
+            node = node.next;
         }
     }
 
@@ -156,7 +203,12 @@ public abstract class MAbstractQueuedSynchronizer {
 
         while (true) {
             //如果node的前一个节点是头节点就尝试CAS加锁，否则继续阻塞
-            if(head.next == node && compareAndSetState(0, count)) {
+            if(/*head.next == node && */compareAndSetState(0, count)) {
+                //清理已经取消等待的节点
+                //TODO:时间负责度为O（n），性能需要优化，考虑将单向链表改成双向链表
+                cleanCancelNode();
+                //除去首节点
+                removeFirstNode();
                 break;
             }
             /*
@@ -202,12 +254,14 @@ public abstract class MAbstractQueuedSynchronizer {
         volatile boolean inConditionQueue;
         volatile int waitStatus;
         //该节点已经被取消等待锁
-        final int CANCEL = -1;
-        final int INIT = 0;
+        static int CANCEL = -1;
+        static final int INIT = 0;
         //等待被唤醒
-        final int SIGNAL = 1;
+        static final int SIGNAL = 1;
         //volatile Node pre;
         volatile Thread thread;
+
+
         public Node() {
             inConditionQueue = false;
         }

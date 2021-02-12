@@ -6,6 +6,7 @@ import org.junit.Test;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 
 public class MReentrantLockV1Test extends TestCase {
     private static int count = 0;
@@ -90,6 +91,7 @@ public class MReentrantLockV1Test extends TestCase {
     }
 
     public void testTryLockTimeout() throws InterruptedException {
+        //AbstractQueuedSynchronizer
         MReentrantLock reentrantLock = new MReentrantLock();
         Thread thread = new Thread(() -> {
             reentrantLock.lock();
@@ -107,18 +109,26 @@ public class MReentrantLockV1Test extends TestCase {
 
         Runnable runnable = () -> {
             while (true) {
-                System.out.println(Thread.currentThread() + " start locking, time = " + System.currentTimeMillis());
+                //System.out.println(Thread.currentThread() + " start locking, time = " + System.currentTimeMillis());
                 boolean b = false;
                 try {
                     b = reentrantLock.tryLock(1000, TimeUnit.MILLISECONDS);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
-                System.out.println(Thread.currentThread() + " return, result = " + b + ", time = " + System.currentTimeMillis());
+                //System.out.println(Thread.currentThread() + " return, result = " + b + ", time = " + System.currentTimeMillis());
                 if (b) {
+                    System.out.println(Thread.currentThread() + "lock====================");
                     break;
                 }
             }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            reentrantLock.unlock();
+            System.out.println(Thread.currentThread() + "unlock====================");
         };
         Thread[] threads = new Thread[10];
         for (int i = 0; i < threads.length; i++) {
