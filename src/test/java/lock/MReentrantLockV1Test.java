@@ -2,10 +2,12 @@ package lock;
 
 import junit.framework.TestCase;
 import org.junit.Test;
+import sun.misc.Contended;
 
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 
 public class MReentrantLockV1Test extends TestCase {
@@ -66,6 +68,7 @@ public class MReentrantLockV1Test extends TestCase {
 
 
     public void testLockInterruptibly() {
+        LongAdder adder;
     }
 
     public void testTryLock() throws InterruptedException {
