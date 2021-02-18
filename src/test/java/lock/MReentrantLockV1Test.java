@@ -9,6 +9,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.AbstractQueuedSynchronizer;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class MReentrantLockV1Test extends TestCase {
     private static int count = 0;
@@ -144,9 +145,4 @@ public class MReentrantLockV1Test extends TestCase {
         thread.join();
     }
 
-    public void testUnlock() {
-    }
-
-    public void testNewCondition() {
-    }
 }

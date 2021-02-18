@@ -5,6 +5,7 @@ import sun.misc.Unsafe;
 import unsafe.MUnsafe;
 
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.LongBinaryOperator;
 
 public class MLongAdder {
     private volatile long base;
@@ -39,7 +40,7 @@ public class MLongAdder {
     //TODO:修复bug：真实值比预期值要小
     public void add(long x) {
         long v = 0;
-        if (cells != null || !casBase((v = base), v + 1)) {
+        if (cells != null || !casBase(v = base, v + 1)) {
             int hash = getProbe();
             while (true) {
                 int len, idx;
@@ -72,6 +73,7 @@ public class MLongAdder {
                             } finally {
                                 cellBusy = 0;
                             }
+                            continue;
                         }
                         //如果正在扩容、迁移元素，则不能进行CAS
                     } else if (cellBusy == 0 && cel.casValue(v = cel.value, v + x)) {
@@ -113,6 +115,96 @@ public class MLongAdder {
             }
         }
     }
+    public void add1(long x) {
+                Cell[] as; long b, v; int m; Cell a;
+        if ((as = cells) != null || !casBase(b = base, b + x)) {
+            boolean uncontended = true;
+            if (as == null || (m = as.length - 1) < 0 ||
+                (a = as[getProbe() & m]) == null ||
+                !(uncontended = a.casValue(v = a.value, v + x)))
+                longAccumulate(x, null, uncontended);
+        }
+    }
+        final void longAccumulate(long x, LongBinaryOperator fn,
+                              boolean wasUncontended) {
+        int h;
+        if ((h = getProbe()) == 0) {
+            ThreadLocalRandom.current(); // force initialization
+            h = getProbe();
+            wasUncontended = true;
+        }
+        boolean collide = false;                // True if last slot nonempty
+        for (;;) {
+            Cell[] as; Cell a; int n; long v;
+            if ((as = cells) != null && (n = as.length) > 0) {
+                if ((a = as[(n - 1) & h]) == null) {
+                    if (cellBusy == 0) {       // Try to attach new Cell
+                        Cell r = new Cell(x);   // Optimistically create
+                        if (cellBusy == 0 && casCellBusy()) {
+                            boolean created = false;
+                            try {               // Recheck under lock
+                                Cell[] rs; int m, j;
+                                if ((rs = cells) != null &&
+                                    (m = rs.length) > 0 &&
+                                    rs[j = (m - 1) & h] == null) {
+                                    rs[j] = r;
+                                    created = true;
+                                }
+                            } finally {
+                                cellBusy = 0;
+                            }
+                            if (created)
+                                break;
+                            continue;           // Slot is now non-empty
+                        }
+                    }
+                    collide = false;
+                }
+                else if (!wasUncontended)       // CAS already known to fail
+                    wasUncontended = true;      // Continue after rehash
+                else if (a.casValue(v = a.value, ((fn == null) ? v + x :
+                                             fn.applyAsLong(v, x))))
+                    break;
+                else if (n >= NCPU || cells != as)
+                    collide = false;            // At max size or stale
+                else if (!collide)
+                    collide = true;
+                else if (cellBusy == 0 && casCellBusy()) {
+                    try {
+                        if (cells == as) {      // Expand table unless stale
+                            Cell[] rs = new Cell[n << 1];
+                            for (int i = 0; i < n; ++i)
+                                rs[i] = as[i];
+                            cells = rs;
+                        }
+                    } finally {
+                        cellBusy = 0;
+                    }
+                    collide = false;
+                    continue;                   // Retry with expanded table
+                }
+                h = advanceProbe(h);
+            }
+            else if (cellBusy == 0 && cells == as && casCellBusy()) {
+                boolean init = false;
+                try {                           // Initialize table
+                    if (cells == as) {
+                        Cell[] rs = new Cell[2];
+                        rs[h & 1] = new Cell(x);
+                        cells = rs;
+                        init = true;
+                    }
+                } finally {
+                    cellBusy = 0;
+                }
+                if (init)
+                    break;
+            }
+            else if (casBase(v = base, ((fn == null) ? v + x :
+                                        fn.applyAsLong(v, x))))
+                break;                          // Fall back on using base
+        }
+    }
 
     public long sum() {
         long sum = base;
@@ -134,7 +226,7 @@ public class MLongAdder {
 
 
     @Contended
-    static class Cell {
+    static final class Cell {
         volatile long value;
         private static final Unsafe UNSAFE;
         private static final long valueOffset;
