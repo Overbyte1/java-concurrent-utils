@@ -75,7 +75,7 @@ public class MLongAdder {
                             continue;
                         }
                         //如果正在扩容、迁移元素，则不能进行CAS
-                    } else if (cellBusy == 0 && cel.casValue(v = cel.value, v + x)) {
+                    } else if (/*cellBusy == 0 && */cel.casValue(v = cel.value, v + x)) {
                         break;
                         //NCPU关系着数组的最大长度，长度越大则意味着冲突越小，但是在统计总和的时候就更加耗时
                         //从减少冲突的角度上看，数组长度最好稍大于CPU核数，但是因为数组的扩容倍数是两倍，所以数组长度不好控制，因此是大于等于NCPU
