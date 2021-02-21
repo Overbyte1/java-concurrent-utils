@@ -91,7 +91,8 @@ public class MLongAdder {
                             for (int i = 0; i < len; i++) {
                                 tempCell[i] = cls[i];
                             }
-                            tempCell[0].value += x;
+                            //不操作0-(len - 1)下标的元素，避免冲突
+                            tempCell[len].value += x;
                             cells = tempCell;
                         } finally {
                             cellBusy = 0;
